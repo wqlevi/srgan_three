@@ -19,53 +19,41 @@ import numpy as np
 import gc, random
 from dataset import dataloader
 from models.compute_gradient import Gradient, Lap
+import argparse
+
 
 random.seed(10)
+norm = lambda x: (x-x.mean())/x.std()
 # params
-plot_per_iter = 1000
-image_size = 64
-batch_size = 16
-num_epochs = 10
-input_channel =3
-lr = 1e-4
-device = torch.device("cuda:0")
 
-# dataloaders
-dataset = dataloader(root = '/big_data/qi1/Celeba/train',hr_shape = image_size)
-dataloader = torch.utils.data.DataLoader(dataset, batch_size = batch_size, shuffle=True, num_workers=2,drop_last = True)
 
 
 # models
-Gnet = Generator().to(device)
-Dnet = Discriminator((input_channel,image_size,image_size)).to(device)
-#FE = FeatureExtractor().to(device)
-FE = VGG19_54().to(device)
-
-Gnet = torch.nn.DataParallel(Gnet, device_ids=[0,1,2])
-Dnet = torch.nn.DataParallel(Dnet, device_ids=[0,1,2])
-FE = torch.nn.DataParallel(FE, device_ids=[0,1,2])
-model_list = [Dnet, Gnet, FE]
-optimizer = [torch.optim.Adam(Dnet.parameters(),
-                             lr = lr,
-                             betas = (.9,.999)),
-            torch.optim.Adam(list(Gnet.parameters())+list(FE.parameters()),
-                             lr = lr,
-                             betas = (.9,.999))]
-"""
-optimizer = [torch.optim.Adam(Dnet.parameters(),
-                             lr = lr,
-                             betas = (.9,.999)),
-            torch.optim.Adam(list(Gnet.parameters())+list(FE.parameters()),
-                             lr = lr,
-                             betas = (.9,.999)),
-            torch.optim.Adam(Gnet.parameters(),
-                             lr = lr,
-                             betas = (.9,.999))]
-"""
-            
-loss = [torch.nn.L1Loss(), torch.nn.BCEWithLogitsLoss(), torch.nn.L1Loss()]
+def make(opt):
+    # dataloaders
+    dataset = dataloader(root = opt.data_path, hr_shape = opt.image_size)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size = opt.batch_size, shuffle=True, num_workers=2,drop_last = True)
+    device = torch.device("cuda:0")
+    Gnet = Generator().to(device)
+    Dnet = Discriminator((input_channel,opt.image_size,opt.image_size)).to(device)
+    #FE = FeatureExtractor().to(device)
+    FE = VGG19_54().to(device)
+    
+    Gnet = torch.nn.DataParallel(Gnet, device_ids=[0,1,2,3])
+    Dnet = torch.nn.DataParallel(Dnet, device_ids=[0,1,2,3])
+    FE = torch.nn.DataParallel(FE, device_ids=[0,1,2,3])
+    model_list = [Dnet, Gnet, FE]
+    optimizer = [torch.optim.Adam(Dnet.parameters(),
+                                 lr = opt.lr,
+                                 betas = (.9,.999)),
+                torch.optim.Adam(list(Gnet.parameters())+list(FE.parameters()),
+                                 lr = opt.lr,
+                                 betas = (.9,.999))]
+                
+    loss = [torch.nn.L1Loss(), torch.nn.BCEWithLogitsLoss(), torch.nn.L1Loss()]
+    return dataloader, model_list, loss, optimizer
 # train
-def train(model, loss, optimizer):
+def train(dataloader, model, loss, optimizer, opt):
     Dnet, Gnet, FE = model
     optimizer_D, optimizer_G= optimizer
     criterion_pixel, criterion_GAN, criterion_content = loss
@@ -74,20 +62,21 @@ def train(model, loss, optimizer):
     Gnet.train()
     FE.train()
     Tensor = torch.cuda.FloatTensor
-    valid = Variable(Tensor(np.ones((batch_size, *Dnet.module.output_shape))),requires_grad=False)
-    fake = Variable(Tensor(np.zeros((batch_size, *Dnet.module.output_shape))),requires_grad=False) 
+    valid = Variable(Tensor(np.ones((opt.batch_size, *Dnet.module.output_shape))),requires_grad=False)
+    fake = Variable(Tensor(np.zeros((opt.batch_size, *Dnet.module.output_shape))),requires_grad=False) 
     
     #noise
-    noise_mean = torch.full((batch_size,*Dnet.module.input_shape),0,dtype=torch.float32,device=device)
+    noise_mean = torch.full((opt.batch_size,*Dnet.module.input_shape),0,dtype=torch.float32,device=device)
     sigma = 1
+    anneal = sigma/num_epochs # decreasing of sigma per epoch
     
     Grad = Gradient().cuda()
     laplace = Lap().cuda()
     
-    for epoch in range(num_epochs):
-        sigma -= 0.1
+    for epoch in tqdm(range(opt.num_epochs),desc='Epochs',colour='green'):
+        sigma -= anneal
         sigma = max(sigma,0)
-        noise_std= torch.full((batch_size,*Dnet.module.input_shape),sigma,dtype=torch.float32,device=device)
+        noise_std= torch.full((opt.batch_size,*Dnet.module.input_shape),sigma,dtype=torch.float32,device=device)
         for i,imgs in enumerate(dataloader):
             imgs_hr = imgs['hr'].to(device)
             imgs_lr = imgs['lr'].to(device)
@@ -102,13 +91,6 @@ def train(model, loss, optimizer):
             #optimizer_FE.zero_grad()
             sr = Gnet(imgs_lr)
             loss_pixel = criterion_pixel(sr, imgs_hr)
-            """
-            if epoch == 100:
-                loss_pixel.backward()
-                optimizer_G.step()
-                print(f"[{i}/{len(dataloader)}] Loss pixel:\t{loss_pixel}")
-                continue
-            """
             
             # MAKE SOME NOISE!!!!
             instance_noise = torch.normal(mean=noise_mean, std=noise_std).to(device)
@@ -173,6 +155,7 @@ def train(model, loss, optimizer):
                 with torch.no_grad():
                     y_grad = Grad(sr[0].to(device)) # 1st derivative
                     y_lap = laplace(sr[0].cuda()) # 2nd derivative type 1
+		    y_grad = norm(y_grad)
                 wandb.log({'img':[wandb.Image(img_grid.detach().cpu().numpy(), caption='GT'),
                                   wandb.Image(sr_grid.detach().cpu().numpy(), caption='SR'),
                                   wandb.Image(y_grad.permute(1,2,0).detach().cpu().numpy(), caption='grad'),
@@ -182,11 +165,23 @@ def train(model, loss, optimizer):
         torch.cuda.empty_cache()
     torch.save({'Gnet_state_dict':Gnet.module.state_dict(),
                 'FE_state_dict':FE.state_dict()},
-               'toy-model_%d_epoch.pth'%(epoch))
+               '%s_%d_epoch.pth'%(opt.model_name,epoch))
             
 if __name__ == '__main__':
-    wandb.init(project='esrgan_2d_FE',entity='wqlevi')
-    train(model_list, loss, optimizer)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_name',type=str, default='esrgan_2d_FE')
+    parser.add_argument('--data_path',type=str)
+    parser.add_argument('--plot_per_iter',type=int, default=1000)
+    parser.add_argument('--image_size',type=int, default=64)
+    parser.add_argument('--batch_size',type=int, default=32)
+    parser.add_argument('--num_epochs',type=int, default=10)
+    parser.add_argument('--input_channel',type=int, default=3)
+    parser.add_argument('--lr',type=float, default=1e-4)
+    opt = parser.parse_args()
+
+    wandb.init(project=opt.model_name,entity='wqlevi')
+    dst, model_list, loss ,optimizer = make(opt)
+    train(dst, model_list, loss, optimizer, opt)
 
 
 
