@@ -1,0 +1,29 @@
+{
+    "os": "Linux-5.4.0-132-generic-x86_64-with-glibc2.17",
+    "python": "3.8.13",
+    "heartbeatAt": "2023-03-21T17:19:54.200621",
+    "startedAt": "2023-03-21T17:19:52.602993",
+    "docker": null,
+    "gpu": "NVIDIA GeForce GTX 1080 Ti",
+    "gpu_count": 4,
+    "cpu_count": 32,
+    "cuda": null,
+    "args": [
+        "--data_path",
+        "/big_data/qi1/Celeba/train",
+        "--batch_size",
+        "16"
+    ],
+    "state": "running",
+    "program": "train.py",
+    "codePath": "train.py",
+    "git": {
+        "remote": "git@github.com:wqlevi/srgan_three.git",
+        "commit": "3a2657f173182464e797e87f7bb6cebb0091ea78"
+    },
+    "email": "wq.levi@gmail.com",
+    "root": "/home/qiwang/git_wq/srgan_three",
+    "host": "WinKS235-51",
+    "username": "qiwang",
+    "executable": "/home/qiwang/anaconda3/envs/ven/bin/python"
+}

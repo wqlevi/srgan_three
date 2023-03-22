@@ -1,0 +1,1 @@
+{"img": {"_type": "images/separated", "width": 30, "height": 30, "format": "png", "count": 2, "filenames": ["media/images/img_2_fc7b2a425d0233496c1f.png", "media/images/img_2_f5fb5f341401850982c0.png"], "captions": ["grad", "lap"]}, "_timestamp": 1679331576, "_runtime": 147, "_step": 2, "_wandb": {"runtime": 8}}

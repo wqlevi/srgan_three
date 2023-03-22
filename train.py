@@ -13,11 +13,12 @@ import torchvision.utils as vutils
 import torchvision.transforms as transforms
 from models.new_model import FeatureExtractor, Generator, Discriminator, VGG19_54
 from utils.utils import power_iteration, psnr_cal, print_norm_hook
+from tqdm import tqdm
 import wandb
 from torch.autograd import Variable
 import numpy as np
 import gc, random
-from dataset import dataloader
+from dataset import dataloader as DataLoader
 from models.compute_gradient import Gradient, Lap
 import argparse
 
@@ -31,11 +32,12 @@ norm = lambda x: (x-x.mean())/x.std()
 # models
 def make(opt):
     # dataloaders
-    dataset = dataloader(root = opt.data_path, hr_shape = opt.image_size)
+    dataset = DataLoader(root = opt.data_path, hr_shape = opt.image_size)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size = opt.batch_size, shuffle=True, num_workers=2,drop_last = True)
+    global device
     device = torch.device("cuda:0")
     Gnet = Generator().to(device)
-    Dnet = Discriminator((input_channel,opt.image_size,opt.image_size)).to(device)
+    Dnet = Discriminator((opt.input_channel,opt.image_size,opt.image_size)).to(device)
     #FE = FeatureExtractor().to(device)
     FE = VGG19_54().to(device)
     
@@ -68,7 +70,7 @@ def train(dataloader, model, loss, optimizer, opt):
     #noise
     noise_mean = torch.full((opt.batch_size,*Dnet.module.input_shape),0,dtype=torch.float32,device=device)
     sigma = 1
-    anneal = sigma/num_epochs # decreasing of sigma per epoch
+    anneal = sigma/opt.num_epochs # decreasing of sigma per epoch
     
     Grad = Gradient().cuda()
     laplace = Lap().cuda()
@@ -149,13 +151,13 @@ def train(dataloader, model, loss, optimizer, opt):
                            'train_SV_FE_conv2':fe_sv_list[1],
                            'train_SV_FE_conv3':fe_sv_list[2]
                            })
-            if i%plot_per_iter == 0:
+            if i%opt.plot_per_iter == 0:
                 img_grid = vutils.make_grid(imgs_hr[:4], 2, padding=2, normalize=True).permute(1,2,0)
                 sr_grid = vutils.make_grid(sr[:4], 2,padding=2, normalize=True).permute(1,2,0) # make color channel as last dim
                 with torch.no_grad():
                     y_grad = Grad(sr[0].to(device)) # 1st derivative
                     y_lap = laplace(sr[0].cuda()) # 2nd derivative type 1
-		    y_grad = norm(y_grad)
+                    y_grad = norm(y_grad)
                 wandb.log({'img':[wandb.Image(img_grid.detach().cpu().numpy(), caption='GT'),
                                   wandb.Image(sr_grid.detach().cpu().numpy(), caption='SR'),
                                   wandb.Image(y_grad.permute(1,2,0).detach().cpu().numpy(), caption='grad'),
