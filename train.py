@@ -7,6 +7,7 @@ Created on Wed Aug 31 14:49:17 2022
 @author: qiwang
 """
 
+#import pdb; pdb.set_trace()
 import torch
 import torchvision.datasets as dset
 import torchvision.utils as vutils
@@ -26,7 +27,9 @@ import argparse
 random.seed(10)
 norm = lambda x: (x-x.mean())/x.std()
 # params
-
+def print_norm_hook(model,inp,outp)->None:
+    print("Inside %s fowarding..."%model.__class__.__name__)
+    #print("Norm of 0-th conv: %s"%str(model.weight.data.norm()))
 
 
 # models
@@ -39,11 +42,13 @@ def make(opt):
     Gnet = Generator().to(device)
     Dnet = Discriminator((opt.input_channel,opt.image_size,opt.image_size)).to(device)
     #FE = FeatureExtractor().to(device)
-    FE = VGG19_54().to(device)
+    FE = VGG19_54(opt.arch_type).to(device)
     
-    Gnet = torch.nn.DataParallel(Gnet, device_ids=[0,1,2,3])
-    Dnet = torch.nn.DataParallel(Dnet, device_ids=[0,1,2,3])
-    FE = torch.nn.DataParallel(FE, device_ids=[0,1,2,3])
+    gpu_list = [range(torch.cuda.device_count())]
+    if opt.multi_gpu:
+        Gnet = torch.nn.DataParallel(Gnet, device_ids=gpu_list)
+        Dnet = torch.nn.DataParallel(Dnet, device_ids=gpu_list)
+        FE = torch.nn.DataParallel(FE, device_ids=gpu_list)
     model_list = [Dnet, Gnet, FE]
     optimizer = [torch.optim.Adam(Dnet.parameters(),
                                  lr = opt.lr,
@@ -76,19 +81,19 @@ def train(dataloader, model, loss, optimizer, opt):
     laplace = Lap().cuda()
     
     for epoch in tqdm(range(opt.num_epochs),desc='Epochs',colour='green'):
+    #for epoch in range(opt.num_epochs):
         sigma -= anneal
         sigma = max(sigma,0)
         noise_std= torch.full((opt.batch_size,*Dnet.module.input_shape),sigma,dtype=torch.float32,device=device)
         for i,imgs in enumerate(dataloader):
             imgs_hr = imgs['hr'].to(device)
             imgs_lr = imgs['lr'].to(device)
-            
+            #breakpoint()
+            #Gnet.module.conv1.register_forward_hook(print_norm_hook)
             #
             # G training
             #
 
-            # register hooks
-            #FE.module.vgg19_54[0].register_forward_hook(print_norm_hook)
             optimizer_G.zero_grad()
             #optimizer_FE.zero_grad()
             sr = Gnet(imgs_lr)
@@ -128,7 +133,8 @@ def train(dataloader, model, loss, optimizer, opt):
             #
             d_sv_list = []
             fe_sv_list= []
-            
+            #breakpoint()
+            print('D loss: %.3f'%loss_D.item())
             with torch.no_grad():
                 for j in range(len(Dnet.module.model)):
                     if Dnet.module.model[j].__str__()[0] == 'N': # meaning its a Norm layer
@@ -179,9 +185,13 @@ if __name__ == '__main__':
     parser.add_argument('--num_epochs',type=int, default=10)
     parser.add_argument('--input_channel',type=int, default=3)
     parser.add_argument('--lr',type=float, default=1e-4)
+    parser.add_argument('--arch_type',type=str, default='VGG16')
+    parser.add_argument('--multi_gpu',type=int, default=1)
+
     opt = parser.parse_args()
 
     wandb.init(project=opt.model_name,entity='wqlevi')
+    wandb.config.update(opt)
     dst, model_list, loss ,optimizer = make(opt)
     train(dst, model_list, loss, optimizer, opt)
 

@@ -28,14 +28,20 @@ class FeatureExtractor(nn.Module):
         return self.vgg19_54(img)
 
 class VGG19_54(nn.Module):
-    def __init__(self):
+    def __init__(self, arch_type:str='VGG16'):
         super(VGG19_54, self).__init__()
-        Model_list = [64,64,'M',128,128,'M',256,256,256,'M',512,512,512,'M']
+        self.arch_type=arch_type
         self.in_channel = 3
+        Model_list = self.get_arch(arch_type)
         self.conv_layers = self.create_conv_layers(Model_list)
     def forward(self,x):
         x = self.conv_layers(x)
         return x
+    def get_arch(self,name:str)->list:
+        if name=='VGG16':
+            return [64,64,'M',128,128,'M',256,256,256,'M',512,512,512,'M']
+        else:
+            return [64,64,'M',128,128,'M',256,256,256,256,'M',512,512,512,512,'M',512,512,512,512,'M']
     def create_conv_layers(self, name):
         layers = []
         in_channel = self.in_channel
@@ -110,11 +116,11 @@ class SN(object):
         for i in range(self.num_svs):
             self.register_buffer('u%d'%i, torch.randn(1,num_outputs))
             self.register_buffer('sv%d'%i, torch.ones(1))
-    @property
+    #property
     def u(self):
         return [getattr(self,'u%i'%i) for i in range(self.num_svs)]
 
-    @property
+    #property
     def sv(self):
         return [getattr(self,'sv%i'%i) for i in range(self.num_svs)] # create attr
     
