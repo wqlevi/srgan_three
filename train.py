@@ -7,7 +7,7 @@ Created on Wed Aug 31 14:49:17 2022
 @author: qiwang
 """
 
-#import pdb; pdb.set_trace()
+import pdb; pdb.set_trace()
 import torch
 import torchvision.datasets as dset
 import torchvision.utils as vutils
@@ -44,7 +44,7 @@ def make(opt):
     #FE = FeatureExtractor().to(device)
     FE = VGG19_54(opt.arch_type).to(device)
     
-    gpu_list = [range(torch.cuda.device_count())]
+    gpu_list = [ i for i in range(torch.cuda.device_count())]
     if opt.multi_gpu:
         Gnet = torch.nn.DataParallel(Gnet, device_ids=gpu_list)
         Dnet = torch.nn.DataParallel(Dnet, device_ids=gpu_list)
