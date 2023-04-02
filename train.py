@@ -36,6 +36,7 @@ def print_norm_hook(model,inp,outp)->None:
 def make(opt):
     # dataloaders
     dataset = DataLoader(root = opt.data_path, hr_shape = opt.image_size)
+    dataset,_ torch.utils.data.random_split(dataset, [len(dataset)//4,len(dataset)-len(dataset)//4])
     dataloader = torch.utils.data.DataLoader(dataset, batch_size = opt.batch_size, shuffle=True, num_workers=2,drop_last = True)
     global device
     device = torch.device("cuda:0")

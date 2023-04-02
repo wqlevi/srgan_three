@@ -28,9 +28,10 @@ class FeatureExtractor(nn.Module):
         return self.vgg19_54(img)
 
 class VGG19_54(nn.Module):
-    def __init__(self, arch_type:str='VGG16'):
+    def __init__(self, arch_type:str='VGG16', BN:bool=True):
         super(VGG19_54, self).__init__()
         self.arch_type=arch_type
+        self.BN = BN
         self.in_channel = 3
         Model_list = self.get_arch(arch_type)
         self.conv_layers = self.create_conv_layers(Model_list)
@@ -48,10 +49,17 @@ class VGG19_54(nn.Module):
         for x in name:
             if type(x) == int:
                 out_channel = x
-                layers+=[Norm(nn.Conv2d(in_channels=in_channel,
+                if self.BN:
+                    layers+=[Norm(nn.Conv2d(in_channels=in_channel,
                         out_channels = out_channel,
                         kernel_size=3,stride=1,padding=1)),
                         nn.BatchNorm2d(x),
+                        nn.ReLU()
+                        ]
+                else:
+                    layers+=[Norm(nn.Conv2d(in_channels=in_channel,
+                        out_channels = out_channel,
+                        kernel_size=3,stride=1,padding=1)),
                         nn.ReLU()
                         ]
                 in_channel = x

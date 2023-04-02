@@ -13,13 +13,13 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 def demo(rank, world_size):
-    print(f'Running basic DDP on rank {rank}')
+    #print(f'Running basic DDP on rank {rank}')
     setup(rank, world_size)
     m = vgg19(weights='DEFAULT').to(rank)
     ddp_model = DDP(m, device_ids=[rank])
     output = ddp_model(torch.randn(20,3,64,64))
-    print(output)
-    cleanup()
+    #print(output)
+    #cleanup()
 def run_demo(demo_fn, world_size):
     mp.spawn(demo_fn,
              args = (world_size,),
@@ -28,5 +28,5 @@ def run_demo(demo_fn, world_size):
 if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
     assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
-    world_size = n_gpus
+    world_size = n_gpus-1
     run_demo(demo, world_size)
