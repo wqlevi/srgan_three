@@ -1,4 +1,4 @@
-import os
+import os, argparse
 import wandb
 from lightning.pytorch.loggers import WandbLogger
 import glob
@@ -76,6 +76,8 @@ class GAN(L.LightningModule):
             hr_shape,
             lr:float=.0003,
             batch_size:int=32,
+            update_FE:bool=False,
+            arch_type:str='VGG16',
             **kwargs):
         super().__init__()
         self.save_hyperparameters()
@@ -86,11 +88,15 @@ class GAN(L.LightningModule):
         self.d_sv_list = []
         self.g_sv_list = []
 
+        self.update_FE = update_FE
+        
         self.generator = Generator()
         self.discriminator = Discriminator((channels, hr_shape, hr_shape))
 
         self.noise_mean = torch.zeros((self.batch_size, *self.discriminator.input_shape))
-        self.FE = VGG19_54(BN=False)
+
+        self.arch_type = arch_type
+        self.FE = VGG19_54(arch_type=self.arch_type, BN=False)
     def forward(self,x):
         return self.generator(x)
     def adversarial_loss(self, y_hat, y):
@@ -188,42 +194,60 @@ class GAN(L.LightningModule):
         self.log("train_SV_Dnet_conv2", d_sv_list[1])
         self.log("train_SV_Dnet_conv3", d_sv_list[2])
         if batch_idx % 100 == 0:
-            self.logger.log_image("Resulself.ts", [grid_sr, grid_hr], caption=["SR", "GT"])
+            self.logger.log_image("Results", [grid_sr, grid_hr], caption=["SR", "GT"])
 
 
     def configure_optimizers(self):
-        opt_g = torch.optim.Adam(self.generator.parameters(), lr=self.hparams.lr)
+        if self.update_FE:
+            opt_g = torch.optim.Adam(list(self.FE.parameters())+list(self.generator.parameters()), lr=self.hparams.lr)
+        else:
+            opt_g = torch.optim.Adam(self.generator.parameters(), lr=self.hparams.lr)
         opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=self.hparams.lr)
         return [opt_g, opt_d], []
-    """
-    def on_validation_epoch_end(self, batch, batch_idx):
-        imgs_hr, imgs_lr = batch['hr'], batch['lr']
-        sr = self.generator(imgs_lr)
-        grid_sr = make_grid(sr)
-        grid_gt = make_grid(imgs_hr)
-        print(grid_sr.shape)
-        wandb_logger.log_image(key="Results", images = [grid_sr, grid_gt], caption=["SR", "GT"])
-        """
-    """
-    def validation_step(self, batch, batch_idx):
-        imgs_hr, imgs_lr = batch['hr'], batch['lr']
-        sr = self.generator(imgs_lr)
-        grid_sr = make_grid(sr)
-        grid_gt = make_grid(imgs_hr)
-        self.logger.log_image("Results",  [grid_sr, grid_gt], caption=["SR", "GT"])
-        """
 
 if __name__ == '__main__':
-    BATCH_SIZE = 16
-    wandb_logger = WandbLogger(project = "esrgan_2d_FE")
-    dm = DataModule(hr_shape = 64, data_dir='/big_data/qi1/Celeba/train', batch_size = BATCH_SIZE, num_workers=32)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_name',type=str, default='esrgan_2d_FE')
+    parser.add_argument('--data_path',type=str)
+    parser.add_argument('--plot_per_iter',type=int, default=1000)
+    parser.add_argument('--image_size',type=int, default=64)
+    parser.add_argument('--batch_size',type=int, default=32)
+    parser.add_argument('--num_epochs',type=int, default=10)
+    parser.add_argument('--input_channel',type=int, default=3)
+    parser.add_argument('--lr',type=float, default=1e-4)
+    parser.add_argument('--arch_type',type=str, default='VGG16')
+    parser.add_argument('--n_gpus',type=int, default=1)
+    parser.add_argument('--update_FE',type=bool, default=True)
+    parser.add_argument('--name_ckp',type=str, default="no_name")
+
+    opt = parser.parse_args()
+
+    wandb_logger = WandbLogger(project = opt.model_name,
+            log_model = True)
+    dm = DataModule(hr_shape = opt.image_size,
+            data_dir= opt.data_path,
+            batch_size = opt.batch_size,
+            num_workers=32)
+
+    checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(dirpath = os.getcwd()+ "/" + opt.model_name + "/" + opt.name_ckp + "/checkpoints/",
+            save_last = True,
+            save_top_k = -1
+            )
     trainer = L.Trainer(
             accelerator = "auto",
-            devices = 4,
-            max_epochs = 20,
+            devices = opt.n_gpus,
+            max_epochs = opt.num_epochs,
             strategy='ddp_find_unused_parameters_true',
             logger = wandb_logger,
-            log_model = True
+            callbacks = [checkpoint_callback],
             ) # strategy flag when one model has not updating parameters
-    model = GAN(channels=3, hr_shape=64, batch_size = BATCH_SIZE )
-    trainer.fit(model, dm)
+    model = GAN(channels=opt.input_channel,
+            hr_shape=opt.image_size,
+            batch_size = opt.batch_size,
+            update_FE = opt.update_FE
+            arch_type = opt.arch_name
+            )
+    trainer.fit(model,
+            dm, 
+            ckpt_path = 'last'
+            )
