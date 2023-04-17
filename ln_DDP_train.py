@@ -1,3 +1,8 @@
+# TODO
+# -[ ] ViT backbone
+# -[ ] YAML file for config experiment
+# -[ ] residual connection in Unet
+# -[ ] frequency guided Dnet
 import os, argparse
 import wandb
 from lightning.pytorch.loggers import WandbLogger
@@ -12,7 +17,7 @@ from torch.autograd import Variable
 from PIL import Image
 #from dataset import dataloader as DataLoader
 from torch.utils.data import DataLoader, random_split
-from models.new_model import Generator, Discriminator, VGG19_54
+from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet
 from utils.utils import psnr_cal
 
 class DataModule(L.LightningDataModule):
@@ -91,7 +96,7 @@ class GAN(L.LightningModule):
         self.update_FE = update_FE
         
         self.generator = Generator()
-        self.discriminator = Discriminator((channels, hr_shape, hr_shape))
+        self.discriminator = Discriminator_Unet()
 
         self.noise_mean = torch.zeros((self.batch_size, *self.discriminator.input_shape))
 
@@ -123,12 +128,23 @@ class GAN(L.LightningModule):
         return fe_sv_list
 
     #@_get_Dnet_sv.setter
+    """
     def _get_Dnet_sv(self):
         d_sv_list = []
         for i,m in enumerate(self.discriminator.model):
             if m.__str__()[0] == 'N': # meaning its a Norm layer
                 d_sv_list.append(m.module.weight_sv.item())
         return d_sv_list
+    """
+
+    """
+    def _get_Gnet_sv(self):
+        g_sv_list = []
+        g_sv_list.append([self.generator.conv1.module.weight_sv.item(),
+            self.generator.conv2.module.weight_sv.item(),
+            self.generator.conv3.module.weight_sv.item()])
+        return g_sv_list
+    """
 
     def training_step(self, batch, batch_idx):
         imgs_hr = batch['hr']
@@ -180,9 +196,10 @@ class GAN(L.LightningModule):
         grid_sr = make_grid(self.generated_imgs)
         grid_hr = make_grid(imgs_hr)
 
-        fe_sv_list, d_sv_list = [],[]
-        d_sv_list = self._get_Dnet_sv()
+        fe_sv_list, g_sv_list = [],[]
+        #d_sv_list = self._get_Dnet_sv()
         fe_sv_list = self._get_FE_sv()
+        #g_sv_list = self._get_Gnet_sv()
 
         psnr = psnr_cal(self.generated_imgs.detach().cpu().squeeze().numpy(), imgs_hr.detach().cpu().squeeze().numpy())
         #-----Logging-----#
@@ -190,9 +207,12 @@ class GAN(L.LightningModule):
         self.log("train_SV_FE_conv1", fe_sv_list[0])
         self.log("train_SV_FE_conv2", fe_sv_list[1])
         self.log("train_SV_FE_conv3", fe_sv_list[2])
-        self.log("train_SV_Dnet_conv1", d_sv_list[0])
-        self.log("train_SV_Dnet_conv2", d_sv_list[1])
-        self.log("train_SV_Dnet_conv3", d_sv_list[2])
+        #self.log("train_SV_Gnet_conv1", g_sv_list[0])
+        #self.log("train_SV_Gnet_conv2", g_sv_list[1])
+        #self.log("train_SV_Gnet_conv3", g_sv_list[2])
+        #self.log("train_SV_Dnet_conv1", d_sv_list[0])
+        #self.log("train_SV_Dnet_conv2", d_sv_list[1])
+        #self.log("train_SV_Dnet_conv3", d_sv_list[2])
         if batch_idx % 100 == 0:
             self.logger.log_image("Results", [grid_sr, grid_hr], caption=["SR", "GT"])
 
@@ -217,7 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr',type=float, default=1e-4)
     parser.add_argument('--arch_type',type=str, default='VGG16')
     parser.add_argument('--n_gpus',type=int, default=1)
-    parser.add_argument('--update_FE',type=bool, default=True)
+    parser.add_argument('--update_FE',action='store_true', help='update only when such flag is added to execute the script') # 
     parser.add_argument('--name_ckp',type=str, default="no_name")
 
     opt = parser.parse_args()
@@ -244,10 +264,10 @@ if __name__ == '__main__':
     model = GAN(channels=opt.input_channel,
             hr_shape=opt.image_size,
             batch_size = opt.batch_size,
-            update_FE = opt.update_FE
-            arch_type = opt.arch_name
+            update_FE = opt.update_FE,
+            arch_type = opt.arch_type
             )
     trainer.fit(model,
             dm, 
-            ckpt_path = 'last'
+            #ckpt_path = 'last'
             )

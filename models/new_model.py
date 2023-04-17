@@ -10,6 +10,7 @@ Created on Mon Aug  2 01:28:09 2021
 """
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 import torch
 from torchvision.models import vgg19
 import math
@@ -159,6 +160,7 @@ class Norm(nn.Module):
     def forward(self, *args):
         self.update_v_u()
         return self.module.forward(*args)
+
 # Do SN and record SV
 class G_SN(nn.Conv2d, SN):
     '''
@@ -235,13 +237,14 @@ class Generator(nn.Module): # interpolation scheme happens
 
 
 class Discriminator(nn.Module,):
-    def __init__(self, input_shape:tuple, conv_method = G_SN):
+    def __init__(self, input_shape:tuple = (3,64,64), conv_method = G_SN):
         super(Discriminator, self).__init__()
         self.conv_method = conv_method
         self.input_shape = input_shape
         in_channels, in_height, in_width = self.input_shape
         patch_h, patch_w = int(in_height / 2 ** 4), int(in_width / 2 ** 4)
         self.output_shape = (1, patch_h, patch_w)
+
 
         def discriminator_block(in_filters, out_filters, first_block=False):
             layers = []
@@ -266,3 +269,34 @@ class Discriminator(nn.Module,):
 
     def forward(self, img):
         return self.model(img)
+
+class Discriminator_Unet(nn.Module):
+    def __init__(self, input_shape:tuple=(3,64,64), num_feature=64,skip_connection=True):
+        super(Discriminator_Unet, self).__init__()
+        self.skip_connection = skip_connection
+        norm = spectral_norm
+        self.in_channel = input_shape[0]
+        self.input_shape = input_shape
+        self.output_shape = (1, int(input_shape[1]/2**2), int(input_shape[2]/2**2))
+        layers_down = []
+        self.conv_in = nn.Conv2d(self.in_channel, num_feature, 3, 1, 1)
+        
+        # down module
+        [layers_down.extend([norm(nn.Conv2d(num_feature*2**i,
+            num_feature*2*2**i, 4, 2, 1, bias=False)),nn.LeakyReLU(0.2, inplace=True)]) for i in range(3)]
+        self.down = nn.Sequential(*layers_down)
+
+        layers_up = []
+        # up module
+        [layers_up.extend([norm(nn.Conv2d(num_feature*2*2**i,
+            num_feature*2**i, 3, 1, 1, bias=False)),nn.LeakyReLU(0.2, inplace=True)]) for i in range(2,-1,-1)]
+        self.up = nn.Sequential(*layers_up)
+
+        self.conv_out = nn.Conv2d(num_feature, 1, 3, 1, 1)
+    def forward(self,x):
+        x = self.conv_in(x)
+        x_low = self.down(x)
+        x_high = F.interpolate(x_low, scale_factor=2, mode='bilinear', align_corners = False)
+        x_high = self.up(x_high)
+        return self.conv_out(x_high)
+
