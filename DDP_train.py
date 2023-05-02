@@ -1,3 +1,5 @@
+# TODO
+# -[ ] line 104 error: some parameter in the model was changed inplace; solution: warp all optimization and stuff into function scope
 import torch
 from tqdm import tqdm
 import os
@@ -16,10 +18,12 @@ from models.new_model import Generator, Discriminator, VGG19_54
 def make(opt, rank, world_size):
     dataset = DataLoader(root=opt.data_path, hr_shape=opt.image_size)
     dist_sampler = DistributedSampler(dataset)
-    dataloader = torch.utils.data.DataLoader(dataset, sampler = dist_sampler,  batch_size = opt.batch_size,  num_workers = 2, drop_last = True)
+    dataloader = torch.utils.data.DataLoader(dataset, sampler = dist_sampler,  batch_size = opt.batch_size,  num_workers = int(os.cpu_count()/2), drop_last = True)
     return dataloader
+
 def cleanup():
     dist.destroy_process_group()
+
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
@@ -32,9 +36,11 @@ def demo(rank, world_size, opt):
     Dnet = Discriminator((opt.input_channel,opt.image_size,opt.image_size)).to(rank)
     FE = VGG19_54(BN=False).to(rank)
 
-    ddp_Gnet = DDP(Gnet, device_ids=[rank])
-    ddp_Dnet = DDP(Dnet, device_ids=[rank])
-    ddp_FE = DDP(FE, device_ids=[rank])
+    # send each model replica to different GPU process
+    #ddp_Gnet = DDP(Gnet, device_ids=[rank],output_device = rank)
+    #ddp_Dnet = DDP(Dnet, device_ids=[rank],output_device = rank)
+    #ddp_FE = DDP(FE, device_ids=[rank], output_device = rank)
+    ddp_Gnet, ddp_Dnet, ddp_FE = list(map(lambda x: DDP(x, device_ids=[rank], output_device=[rank]), [Gnet, Dnet, FE]))
 
     Tensor = torch.cuda.FloatTensor
     valid = Variable(Tensor(np.ones((opt.batch_size, *Dnet.output_shape))),requires_grad=False).to(rank)
@@ -68,10 +74,10 @@ def demo(rank, world_size, opt):
             #optimizer_FE.zero_grad()
             sr = ddp_Gnet(imgs_lr)
             loss_pixel = l1(sr, imgs_hr)
-            
             # MAKE SOME NOISE!!!!
+
             instance_noise = torch.normal(mean=noise_mean, std=noise_std).to(rank)
-            pred_real = ddp_Dnet(imgs_hr+instance_noise).detach() # not computing the gradient wrt this
+            pred_real = ddp_Dnet(imgs_hr+instance_noise).detach() # not computing the gradient wrt this, more restricted function scope needed
             pred_fake = ddp_Dnet(sr+instance_noise)
             loss_GAN_G = l_BCE(pred_fake - pred_real.mean(0, keepdim=True), valid)
             sr_feature = ddp_FE(sr)
@@ -88,11 +94,11 @@ def demo(rank, world_size, opt):
             # D training
             #
             optimizer_D.zero_grad()
-            pred_real = ddp_Dnet(imgs_hr+instance_noise)
-            pred_fake = ddp_Dnet(sr.detach()+instance_noise) # not computing gradient wrt this
+            pred_real_d = ddp_Dnet(imgs_hr+instance_noise)
+            pred_fake_d = ddp_Dnet(sr.detach()+instance_noise) # not computing gradient wrt this
             
-            loss_real = l_BCE(pred_real - pred_fake.mean(0,keepdim=True), valid)
-            loss_fake = l_BCE(pred_fake - pred_real.mean(0,keepdim=True), fake)
+            loss_real = l_BCE(pred_real_d - pred_fake_d.mean(0,keepdim=True), valid)
+            loss_fake = l_BCE(pred_fake_d - pred_real_d.mean(0,keepdim=True), fake)
             
             loss_D = (loss_real + loss_fake) /2
             #loss_D.backward(inputs = list(ddp_Dnet.parameters()))
@@ -145,11 +151,13 @@ def demo(rank, world_size, opt):
         gc.collect()
         torch.cuda.empty_cache()
 
+# spawn the task
 def run_demo(opt, demo_fn, world_size):
     mp.spawn(demo_fn,
              args=(world_size,opt),
              nprocs=world_size,
              join=True)
+
     #print(output)
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -158,7 +166,7 @@ if __name__ == '__main__':
     parser.add_argument('--plot_per_iter',type=int, default=1000)
     parser.add_argument('--image_size',type=int, default=64)
     parser.add_argument('--batch_size',type=int, default=32)
-    parser.add_argument('--num_epochs',type=int, default=10)
+    parser.add_argument('--num_epochs',type=int, default=1)
     parser.add_argument('--input_channel',type=int, default=3)
     parser.add_argument('--lr',type=float, default=1e-4)
     parser.add_argument('--arch_type',type=str, default='VGG16')

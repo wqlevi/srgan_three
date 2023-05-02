@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 import numpy as np
 class dataloader(Dataset):
-    def __init__(self,root,hr_shape):
+    def __init__(self,root,hr_shape, fmt='jpg'):
         self.root = root
         self.shape = hr_shape
         self.lr_shape = int(hr_shape/2)
@@ -27,7 +27,7 @@ class dataloader(Dataset):
             transforms.ToTensor(),
             transforms.Normalize((.5,.5,.5),(.5,.5,.5))
             ])
-        self.files = sorted(glob.glob(self.root+'/*jpg'))
+        self.files = sorted(glob.glob(self.root+'/*'+fmt))
     def __getitem__(self,index):
         img = Image.open(self.files[index % len(self.files)])
         #img = np.array(img)

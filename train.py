@@ -4,10 +4,10 @@
 Created on Wed Aug 31 14:49:17 2022
 - [x] ESRGAN training 
 - [x] Recording 1st SV of conv1,2,3 
+- [x] global step logged to metrics
 @author: qiwang
 """
 
-import pdb; pdb.set_trace()
 import torch
 import torchvision.datasets as dset
 import torchvision.utils as vutils
@@ -26,18 +26,14 @@ import argparse
 
 random.seed(10)
 norm = lambda x: (x-x.mean())/x.std()
-# params
-def print_norm_hook(model,inp,outp)->None:
-    print("Inside %s fowarding..."%model.__class__.__name__)
-    #print("Norm of 0-th conv: %s"%str(model.weight.data.norm()))
 
 
 # models
 def make(opt):
     # dataloaders
     dataset = DataLoader(root = opt.data_path, hr_shape = opt.image_size)
-    dataset,_ torch.utils.data.random_split(dataset, [len(dataset)//4,len(dataset)-len(dataset)//4])
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size = opt.batch_size, shuffle=True, num_workers=2,drop_last = True)
+    dataset,_ =  torch.utils.data.random_split(dataset, [len(dataset)//14,len(dataset)-len(dataset)//14])
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size = opt.batch_size, shuffle=True, num_workers=16,drop_last = True)
     global device
     device = torch.device("cuda:0")
     Gnet = Generator().to(device)
@@ -157,7 +153,9 @@ def train(dataloader, model, loss, optimizer, opt):
                            'train_SV_FE_conv1':fe_sv_list[0],
                            'train_SV_FE_conv2':fe_sv_list[1],
                            'train_SV_FE_conv3':fe_sv_list[2]
-                           })
+                           },
+                           step=len(dataloader)*opt.last_epoch+i
+                           )
             if i%opt.plot_per_iter == 0:
                 img_grid = vutils.make_grid(imgs_hr[:4], 2, padding=2, normalize=True).permute(1,2,0)
                 sr_grid = vutils.make_grid(sr[:4], 2,padding=2, normalize=True).permute(1,2,0) # make color channel as last dim
@@ -169,7 +167,7 @@ def train(dataloader, model, loss, optimizer, opt):
                                   wandb.Image(sr_grid.detach().cpu().numpy(), caption='SR'),
                                   wandb.Image(y_grad.permute(1,2,0).detach().cpu().numpy(), caption='grad'),
                                   wandb.Image(y_lap.squeeze().permute(1,2,0).detach().cpu().numpy(), caption='laplace')]})
-            
+         
         gc.collect()
         torch.cuda.empty_cache()
     torch.save({'Gnet_state_dict':Gnet.module.state_dict(),
@@ -188,6 +186,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr',type=float, default=1e-4)
     parser.add_argument('--arch_type',type=str, default='VGG16')
     parser.add_argument('--multi_gpu',type=int, default=1)
+    parser.add_argument('--last_epoch',type=int, default=0)
 
     opt = parser.parse_args()
 

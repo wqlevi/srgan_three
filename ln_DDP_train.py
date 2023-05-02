@@ -1,13 +1,19 @@
 # TODO
 # -[ ] ViT backbone
 # -[ ] YAML file for config experiment
-# -[ ] residual connection in Unet
+# -[x] residual connection in Unet, improving PSNR
+
 # -[ ] frequency guided Dnet
+# -[ ] sobel filter for FE to extract gradient constrain  
 import os, argparse
 import wandb
-from lightning.pytorch.loggers import WandbLogger
 import glob
+
+from lightning.pytorch.loggers import WandbLogger
 import lightning as L
+from torchmetrics.functional import peak_signal_noise_ratio,structural_similarity_index_measure
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -17,8 +23,9 @@ from torch.autograd import Variable
 from PIL import Image
 #from dataset import dataloader as DataLoader
 from torch.utils.data import DataLoader, random_split
-from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet
-from utils.utils import psnr_cal
+from importlib import import_module
+from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet, Discriminator_SN_SC
+from utils import utils
 
 class DataModule(L.LightningDataModule):
     def __init__(
@@ -50,7 +57,6 @@ class DataModule(L.LightningDataModule):
         self.files = sorted(glob.glob(self.data_dir+'/*jpg'))
     def __getitem__(self,index):
         img = Image.open(self.files[index % len(self.files)])
-        #img = np.array(img)
         im_lr = self.lr_transform(img)
         im_hr = self.hr_transform(img)
         return {"lr":im_lr, "hr":im_hr}
@@ -77,31 +83,37 @@ class DataModule(L.LightningDataModule):
 class GAN(L.LightningModule):
     def __init__(
             self,
-            channels,
-            hr_shape,
+            config,
+            channels:int=3,
+            #hr_shape:tuple,
             lr:float=.0003,
             batch_size:int=32,
             update_FE:bool=False,
-            arch_type:str='VGG16',
             **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
         self.batch_size = batch_size
+        self.standarize = lambda x: (x-x.min())/(x.max()-x.min())
         # updating attr needed
         self.fe_sv_list = []
         self.d_sv_list = []
         self.g_sv_list = []
 
         self.update_FE = update_FE
-        
+        self.log_images_interval = 1000
+        self.psnr_cal = peak_signal_noise_ratio
+        self.ssim_cal = structural_similarity_index_measure
+        self.lpips_cal = LearnedPerceptualImagePatchSimilarity(net='vgg', reduction='mean')
+
         self.generator = Generator()
-        self.discriminator = Discriminator_Unet()
+        mod = import_module("models.new_model")
+        self.discriminator = getattr(mod, config.D_type)()
 
         self.noise_mean = torch.zeros((self.batch_size, *self.discriminator.input_shape))
 
-        self.arch_type = arch_type
-        self.FE = VGG19_54(arch_type=self.arch_type, BN=False)
+        self.FE = VGG19_54(arch_type=config.arch_type, BN=False)
+
     def forward(self,x):
         return self.generator(x)
     def adversarial_loss(self, y_hat, y):
@@ -120,12 +132,14 @@ class GAN(L.LightningModule):
         return self.g_sv_list
     """
     #@_get_FE_sv.setter
+    """
     def _get_FE_sv(self):
         fe_sv_list = []
         for j,m in enumerate(self.FE.conv_layers.modules()):
             if m.__str__()[0] == 'N': # meaning its a Norm layer
                 fe_sv_list.append(m.module.weight_sv.item())
         return fe_sv_list
+    """
 
     #@_get_Dnet_sv.setter
     """
@@ -197,26 +211,30 @@ class GAN(L.LightningModule):
         grid_hr = make_grid(imgs_hr)
 
         fe_sv_list, g_sv_list = [],[]
+        vs_d_dict = utils.sv_2_dict(self.discriminator)
+        vs_fe_dict = utils.sv_2_dict(self.FE)
         #d_sv_list = self._get_Dnet_sv()
-        fe_sv_list = self._get_FE_sv()
+        #fe_sv_list = self._get_FE_sv()
         #g_sv_list = self._get_Gnet_sv()
 
-        psnr = psnr_cal(self.generated_imgs.detach().cpu().squeeze().numpy(), imgs_hr.detach().cpu().squeeze().numpy())
+        with torch.no_grad():
+            psnr = self.psnr_cal(self.generated_imgs, imgs_hr)
+            ssim = self.ssim_cal(self.generated_imgs, imgs_hr)
+            lpips = self.lpips_cal(self.standarize(self.generated_imgs),self.standarize(imgs_hr))
+#        print(f"PSNR:{psnr}\tSSIM:{ssim}\tLPIPS:{lpips}")
         #-----Logging-----#
         self.log("PNSR", psnr)
-        self.log("train_SV_FE_conv1", fe_sv_list[0])
-        self.log("train_SV_FE_conv2", fe_sv_list[1])
-        self.log("train_SV_FE_conv3", fe_sv_list[2])
-        #self.log("train_SV_Gnet_conv1", g_sv_list[0])
-        #self.log("train_SV_Gnet_conv2", g_sv_list[1])
-        #self.log("train_SV_Gnet_conv3", g_sv_list[2])
-        #self.log("train_SV_Dnet_conv1", d_sv_list[0])
-        #self.log("train_SV_Dnet_conv2", d_sv_list[1])
-        #self.log("train_SV_Dnet_conv3", d_sv_list[2])
-        if batch_idx % 100 == 0:
+        self.log("SSIm", ssim)
+        self.log("LPIPS", lpips)
+        wandb.log(vs_d_dict) # not changing much and not starting from same value for all layers
+        wandb.log(vs_fe_dict) # not changing much and not starting from same value for all layers
+        if batch_idx % self.log_images_interval == 0:
             self.logger.log_image("Results", [grid_sr, grid_hr], caption=["SR", "GT"])
 
 
+    #def validation_step(self):
+    #    """TODO, and add check_val_every_n_epoch=1(default) to Trainer"""
+    #    pass
     def configure_optimizers(self):
         if self.update_FE:
             opt_g = torch.optim.Adam(list(self.FE.parameters())+list(self.generator.parameters()), lr=self.hparams.lr)
@@ -239,11 +257,13 @@ if __name__ == '__main__':
     parser.add_argument('--n_gpus',type=int, default=1)
     parser.add_argument('--update_FE',action='store_true', help='update only when such flag is added to execute the script') # 
     parser.add_argument('--name_ckp',type=str, default="no_name")
+    parser.add_argument('--D_type',type=str, default="no_name")
 
     opt = parser.parse_args()
 
     wandb_logger = WandbLogger(project = opt.model_name,
-            log_model = True)
+            log_model = False)
+
     dm = DataModule(hr_shape = opt.image_size,
             data_dir= opt.data_path,
             batch_size = opt.batch_size,
@@ -260,8 +280,11 @@ if __name__ == '__main__':
             strategy='ddp_find_unused_parameters_true',
             logger = wandb_logger,
             callbacks = [checkpoint_callback],
+            fast_dev_run=True
             ) # strategy flag when one model has not updating parameters
-    model = GAN(channels=opt.input_channel,
+    model = GAN(
+            opt,
+            channels=opt.input_channel,
             hr_shape=opt.image_size,
             batch_size = opt.batch_size,
             update_FE = opt.update_FE,

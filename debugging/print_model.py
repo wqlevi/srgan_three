@@ -1,9 +1,9 @@
 import torch
 from lightning.pytorch.utilities import model_summary as MS
 import lightning as L
-from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet
+from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet, Discriminator_SN_SC
 
-class P_G(Discriminator_Unet, L.LightningModule):
+class P_G(Discriminator, L.LightningModule):
     def __init__(self):
         super().__init__()
         self.example_input_array = torch.Tensor(16,3,64,64)

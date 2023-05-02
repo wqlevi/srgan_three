@@ -35,6 +35,7 @@ class VGG19_54(nn.Module):
         super(VGG19_54, self).__init__()
         self.arch_type=arch_type
         self.BN = BN
+        self.device = torch.device("cuda:0")
         self.in_channel = 3
         Model_list = self.get_arch(arch_type)
         self.conv_layers = self.create_conv_layers(Model_list)
@@ -70,6 +71,28 @@ class VGG19_54(nn.Module):
             elif x=='M':
                 layers+=[nn.MaxPool2d(kernel_size=2,stride=2)]
         return nn.Sequential(*layers)
+    def def_loss(self):
+        self.loss_FE_fn = nn.L1Loss().to(self.device)
+    def def_optimizer(self):
+        FE_optim_params = []
+        for k,v in self.conv_layers.named_parameters():
+            if v.requries_grad:
+                FE_optim_params.append(v)
+        self.FE_optimizer = Adam(FE_optim_params, lr=self.train_config['lr'], weight_decay=0)
+
+    def feed_data(self, HR, SR):
+        # modify this function so that `datas` are taken from output of Gnet  
+        self.HR = HR
+        self.SR = SR
+    def FE_forward(self):
+        self.FE_HR = self.conv_layers(self.HR)
+        self.FE_SR = self.conv_layers(self.SR)
+    def optimize_parameters(self):
+        self.FE_optimizer.zero_grad()
+        self.FE_forward()
+        FE_loss = self.loss_FE_fn(self.SR, self.HR)
+        FE_loss.backwards()
+        self.FE_optimizer.step()
 
 class DenseResidualBlock(nn.Module):
     """
@@ -201,7 +224,8 @@ class Conv_SN(nn.Conv2d, SN):
                              self.dilation, self.groups, ))
     
 
-    
+# TODO:
+# write function scope training and updating for Gnet
 class Generator(nn.Module): # interpolation scheme happens
     # A Generator inheritating SN for saving singular value of conv2d
     def __init__(self, conv_method = Conv_SN, channels=3, filters=64, num_res_blocks=32, num_upsample=1):
