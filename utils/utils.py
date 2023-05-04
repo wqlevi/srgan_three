@@ -90,4 +90,6 @@ def sv_2_dict(model)->dict:
             sv_dict['Conv_sv_%i'%counter] = v.weight_sv.data.item()
             counter += 1
     return sv_dict
-
+def freeze_model(model):
+    for params in model.parameters():
+        params.requires_grad =False

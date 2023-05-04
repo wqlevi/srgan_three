@@ -113,7 +113,8 @@ class GAN(L.LightningModule):
         self.noise_mean = torch.zeros((self.batch_size, *self.discriminator.input_shape))
 
         self.FE = VGG19_54(arch_type=config.arch_type, BN=False)
-
+        if not self.update_FE:
+            utils.freeze_model(self.FE)
     def forward(self,x):
         return self.generator(x)
     def adversarial_loss(self, y_hat, y):
@@ -226,8 +227,10 @@ class GAN(L.LightningModule):
         self.log("PNSR", psnr)
         self.log("SSIm", ssim)
         self.log("LPIPS", lpips)
-        wandb.log(vs_d_dict) # not changing much and not starting from same value for all layers
-        wandb.log(vs_fe_dict) # not changing much and not starting from same value for all layers
+        #wandb.log(vs_d_dict) # not changing much and not starting from same value for all layers
+        #wandb.log(vs_fe_dict) # not changing much and not starting from same value for all layers
+        [self.log(k,v) for k,v in vs_d_dict.items()] # not changing much and not starting from same value for all layers
+        [self.log(k,v) for k,v in vs_fe_dict.items()] # not changing much and not starting from same value for all layers
         if batch_idx % self.log_images_interval == 0:
             self.logger.log_image("Results", [grid_sr, grid_hr], caption=["SR", "GT"])
 
@@ -280,7 +283,7 @@ if __name__ == '__main__':
             strategy='ddp_find_unused_parameters_true',
             logger = wandb_logger,
             callbacks = [checkpoint_callback],
-            fast_dev_run=True
+            #fast_dev_run=True
             ) # strategy flag when one model has not updating parameters
     model = GAN(
             opt,
