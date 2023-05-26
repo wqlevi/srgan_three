@@ -106,7 +106,9 @@ def train(dataloader, model, loss, optimizer, opt):
             
             loss_content = criterion_content(sr_feature, hr_feature)
             
-            loss_G = loss_content + 5e-3*loss_GAN_G + 1e-2*loss_pixel
+            beta = 5e-3
+            gamma = 1
+            loss_G = loss_content + beta*loss_GAN_G + gamma*loss_pixel
             loss_G.backward() # -[BUG] updating both FE and G?
             #optimizer_FE.step()
             optimizer_G.step()

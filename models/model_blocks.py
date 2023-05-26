@@ -35,6 +35,12 @@ class DWT(nn.Module):
         self.requires_grad = False
     def forward(self, x):
         return dwt_init(x)
+class IWT(nn.Module):
+    def __init__(self):
+        super(IWT, self).__init__()
+        self.requires_grad = False
+    def forward(self, x):
+        return iwt_init(x)
     
 class DWT_transform(nn.Module):
     def __init__(self, in_channels,out_channels):
@@ -47,3 +53,35 @@ class DWT_transform(nn.Module):
         dwt_low_frequency = self.conv1x1_low(dwt_low_frequency)
         dwt_high_frequency = self.conv1x1_high(dwt_high_frequency)
         return dwt_low_frequency,dwt_high_frequency
+
+
+# ----- IWT blocks -----#
+def iwt_init(x):
+    # completely reverse dwt_init function
+    # x : all LL, LH, HL, HH cat along channel
+    r = 2
+    in_batch, in_channel, in_height, in_width = x.size()
+    out_batch, out_channel, out_height, out_width = (
+            in_batch,
+            int(in_channel / (r**2)),
+            r*in_height,
+            r*in_width
+            )
+    x1 = x[:, 0:out_channel, :, :] /2
+    x2 = x[:, out_channel:out_channel *2, :, :] /2
+    x3 = x[:, out_channel *2:out_channel *3, :, :] /2
+    x4 = x[:, out_channel *3:out_channel *4, :, :] /2
+
+    h = torch.zeros([out_batch, out_channel, out_height, out_width]).float()
+    h[:, :, 0::2, 0::2] = x1 - x2 - x3 + x4
+    h[:, :, 1::2, 0::2] = x1 - x2 + x3 - x4
+    h[:, :, 0::2, 1::2] = x1 + x2 - x3 - x4
+    h[:, :, 1::2, 1::2] = x1 + x2 + x3 + x4
+    return h
+
+class IWT_transform(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.iwt = IWT()
+        self.conv1x1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0)
+

@@ -34,7 +34,7 @@ gt_ts = transform(gt)[None,:,:,:]
 
 
 # load our weights
-ckp_path = 'esrgan_2d_FE/updating_VGG19_noBN_Unet_D_SC_SN/checkpoints/last-v2.ckpt' # a Unet Discriminator version GAN, trained for 50 epoch
+ckp_path = 'esrgan_2d_FE/frozen_VGG19_noBN_Unet_D/checkpoints/last.ckpt' # a Unet Discriminator version GAN, trained for 50 epoch
 Gnet = Generator()
 load_pretrained(Gnet, ckp_path, replace_key = 'generator.')
 Gnet.eval()
@@ -42,7 +42,7 @@ pred = Gnet(x)
 pred_n = norm(pred)
 pred_im = transform_back(pred_n.detach().to(torch.uint8).cpu().squeeze().permute(1,2,0).numpy()).convert('RGB')
 pred_im.save("SR_ours.png")
-crop = pred_im.crop(pred_im.size(0)-50, 0, pred_im.size(1)+50, 100)
+crop = pred_im.crop((pred_im.size[0]-50, 0, pred_im.size[1]+50, 100))
 crop.save("crop.png")
 #plt.imshow(pred.detach().squeeze().permute(1,2,0).numpy()), plt.show()
 

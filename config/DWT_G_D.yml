@@ -1,0 +1,16 @@
+model_name: 'esrgan_2d_FE'
+data_path: '/big_data/qi1/Celeba/train'
+plot_per_iter: 1000
+image_size: 64
+batch_size: 12
+num_epochs: 50
+input_channel: 3
+lr: 0.0001
+n_gpus: 4
+update_FE: false
+is_FE: false
+is_ckp: false
+name_ckp: 'DWT_G_D'
+arch_type: 'vgg19'
+D_type: 'dwt_UNet'
+G_type: 'dwt_UNet_G'

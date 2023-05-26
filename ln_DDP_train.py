@@ -3,7 +3,7 @@
 # -[ ] YAML file for config experiment
 # -[x] residual connection in Unet, improving PSNR
 
-# -[ ] frequency guided Dnet
+# -[x] frequency guided Dnet(dwt Unet)
 # -[ ] sobel filter for FE to extract gradient constrain  
 import os, argparse
 import wandb
@@ -24,7 +24,7 @@ from PIL import Image
 #from dataset import dataloader as DataLoader
 from torch.utils.data import DataLoader, random_split
 from importlib import import_module
-from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet, Discriminator_SN_SC
+from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet, Discriminator_SN_SC, FeatureExtractor
 from utils import utils
 
 class DataModule(L.LightningDataModule):
@@ -107,16 +107,20 @@ class GAN(L.LightningModule):
         self.ssim_cal = structural_similarity_index_measure
         self.lpips_cal = LearnedPerceptualImagePatchSimilarity(net='vgg', reduction='mean')
 
-        self.generator = Generator()
+        #self.generator = Generator()
         mod = import_module("models.new_model")
         self.discriminator = getattr(mod, config.D_type)()
+        self.generator = getattr(mod, config.G_type)()
 
+        self.noise_anneal_epochs = 20
         self.noise_mean = torch.zeros((self.batch_size, *self.discriminator.input_shape))
 
         if self.is_FE:
-            self.FE = VGG19_54(arch_type=config.arch_type, BN=False)
-        if not self.update_FE:
-            utils.freeze_model(self.FE)
+            #self.FE = VGG19_54(arch_type=config.arch_type, BN=False)
+            self.FE= getattr(mod, 'FeatureExtractor')(arch_type = config.arch_type, pretrained=False)
+            if not self.update_FE:
+                utils.freeze_model(self.FE)
+
     def forward(self,x):
         return self.generator(x)
     def adversarial_loss(self, y_hat, y):
@@ -131,14 +135,13 @@ class GAN(L.LightningModule):
         imgs_hr = batch['hr']
         imgs_lr = batch['lr']
         optimizer_g, optimizer_d = self.optimizers()
-        self.step_sigma = 1/self.trainer.max_epochs
+        self.step_sigma = 1/self.noise_anneal_epochs
 
         valid = torch.ones((self.batch_size, *self.discriminator.output_shape),dtype=torch.float32)
         fake = torch.zeros((self.batch_size, *self.discriminator.output_shape),dtype=torch.float32)
 
         sigma_numerics = 1 - self.current_epoch * self.step_sigma
         self.sigma_numerics = max(sigma_numerics, 0)
-        print(self.sigma_numerics)
         sigma = torch.full((self.batch_size, *self.discriminator.input_shape), self.sigma_numerics)
 
         instancenoise = torch.normal(mean = self.noise_mean, std=sigma).type_as(imgs_lr)
@@ -227,30 +230,40 @@ if __name__ == '__main__':
     parser.add_argument('--num_epochs',type=int, default=10)
     parser.add_argument('--input_channel',type=int, default=3)
     parser.add_argument('--lr',type=float, default=1e-4)
-    parser.add_argument('--arch_type',type=str, default='VGG16')
     parser.add_argument('--n_gpus',type=int, default=1)
+    parser.add_argument('--n_nodes',type=int, default=1)
+    parser.add_argument('--use_yaml_config',action='store_true', help = 'use YAML file for parsing configurations')
     parser.add_argument('--update_FE',action='store_true', help='update only when such flag is added to execute the script') # 
     parser.add_argument('--is_FE',action='store_true', help='whether FE exist') # 
+    parser.add_argument('--is_ckp',action='store_true', help='whether use ckp') # 
     parser.add_argument('--name_ckp',type=str, default="no_name")
-    parser.add_argument('--D_type',type=str, default="no_name")
+    parser.add_argument('--arch_type',type=str, default='VGG16')
+    parser.add_argument('--D_type',type=str, default="Discriminator")
+    parser.add_argument('--G_type',type=str, default="Generator")
 
     opt = parser.parse_args()
+    if opt.use_yaml_config:
+        dict_yaml = utils.load_yaml(f'config/{opt.name_ckp}')
+        opt = argparse.Namespace(**dict_yaml)
 
     wandb_logger = WandbLogger(project = opt.model_name,
-            log_model = False)
+            log_model = False,
+            group = opt.name_ckp)
 
     dm = DataModule(hr_shape = opt.image_size,
             data_dir= opt.data_path,
             batch_size = opt.batch_size,
             num_workers=32)
 
-    checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(dirpath = os.getcwd()+ "/" + opt.model_name + "/" + opt.name_ckp + "/checkpoints/",
+    ckp_path = os.getcwd()+ "/" + opt.model_name + "/" + opt.name_ckp + "/checkpoints/"
+    checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(dirpath = ckp_path,
             save_last = True,
             save_top_k = -1
             )
     trainer = L.Trainer(
             accelerator = "auto",
             devices = opt.n_gpus,
+            num_nodes = opt.n_nodes,
             max_epochs = opt.num_epochs,
             strategy='ddp_find_unused_parameters_true',
             logger = wandb_logger,
@@ -258,6 +271,8 @@ if __name__ == '__main__':
             limit_train_batches = 0.1,
             #fast_dev_run=True
             ) # strategy flag when one model has not updating parameters
+
+
     model = GAN(
             opt,
             channels=opt.input_channel,
@@ -266,7 +281,17 @@ if __name__ == '__main__':
             update_FE = opt.update_FE,
             arch_type = opt.arch_type
             )
-    trainer.fit(model,
+    CKP_FLAG = False
+    if trainer.global_rank == 0:
+        if checkpoint_callback.file_exists(ckp_path+'last.ckpt', trainer) and opt.is_ckp:
+            print('\033[93m WARNING: Checkpoint loading... \033[0m')
+            CKP_FLAG = True
+        utils.write_config(opt)
+    if CKP_FLAG:
+        trainer.fit(model,
             dm, 
             ckpt_path = 'last'
             )
+    else:
+        trainer.fit(model,
+            dm)

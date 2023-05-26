@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 import torch
-from torchvision.models import vgg19
+from torchvision.models import vgg19, resnet18, ResNet18_Weights
 import math
 import sys
 sys.path.append("../")
@@ -22,13 +22,19 @@ from models.model_blocks import DWT_transform
 
 
 class FeatureExtractor(nn.Module):
-    def __init__(self):
+    def __init__(self, arch_type:str=vgg19, pretrained:bool=True):
         super(FeatureExtractor, self).__init__()
-        vgg19_model = vgg19(weights='IMAGENET1K_V1')
-        self.vgg19_54 = nn.Sequential(*list(vgg19_model.features.children())[:37])
-
+        if arch_type == 'vgg19':
+            vgg19_model = vgg19(weights='IMAGENET1K_V1')
+            self.model = nn.Sequential(*list(vgg19_model.features.children())[:37])
+        elif arch_type == 'resnet18':
+            weights = ResNet18_Weights.DEFAULT
+            resnet18_model =  resnet18(weights = weights).eval()
+            self.model = nn.Sequential(*nn.ModuleList(resnet18_model.children())[:-2])
+        if not pretrained:
+            self.model.apply(_init_weights)
     def forward(self, img):
-        return self.vgg19_54(img)
+        return self.model(img)
 
 class VGG19_54(nn.Module):
     def __init__(self, arch_type:str='VGG16', BN:bool=True):
@@ -74,6 +80,7 @@ class VGG19_54(nn.Module):
 class DenseResidualBlock(nn.Module):
     """
     The core module of paper: (Residual Dense Network for Image Super-Resolution, CVPR 18)
+    output_dimension = input_dimension
     """
 
     def __init__(self, filters, res_scale=0.2):
@@ -261,6 +268,7 @@ class Generator(nn.Module): # interpolation scheme happens
             m.bias.data.fill_(.01)
 
 
+
 class Discriminator(nn.Module,):
     def __init__(self, input_shape:tuple = (3,64,64), conv_method = Conv_SN):
         super(Discriminator, self).__init__()
@@ -270,22 +278,10 @@ class Discriminator(nn.Module,):
         patch_h, patch_w = int(in_height / 2 ** 4), int(in_width / 2 ** 4)
         self.output_shape = (1, patch_h, patch_w)
 
-
-        def discriminator_block(in_filters, out_filters, first_block=False):
-            layers = []
-            layers.append(Norm(nn.Conv2d(in_filters, out_filters, kernel_size=3, stride=1, padding=1)))
-            if not first_block:
-                layers.append(nn.BatchNorm2d(out_filters))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            layers.append(Norm(nn.Conv2d(out_filters, out_filters, kernel_size=3, stride=2, padding=1)))
-            layers.append(nn.BatchNorm2d(out_filters))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
-
         layers = []
         in_filters = in_channels
         for i, out_filters in enumerate([64, 128, 256, 512]):
-            layers.extend(discriminator_block(in_filters, out_filters, first_block=(i == 0)))
+            layers.extend(self.discriminator_block(in_filters, out_filters, first_block=(i == 0)))
             in_filters = out_filters
 
         layers.append(Norm(nn.Conv2d(out_filters, 1, kernel_size=3, stride=1, padding=1)))
@@ -295,6 +291,16 @@ class Discriminator(nn.Module,):
 
     def forward(self, img):
         return self.model(img)
+    def discriminator_block(self,in_filters, out_filters, first_block=False):
+        layers = []
+        layers.append(Norm(nn.Conv2d(in_filters, out_filters, kernel_size=3, stride=1, padding=1)))
+        if not first_block:
+            layers.append(nn.BatchNorm2d(out_filters))
+        layers.append(nn.LeakyReLU(0.2, inplace=True))
+        layers.append(Norm(nn.Conv2d(out_filters, out_filters, kernel_size=3, stride=2, padding=1)))
+        layers.append(nn.BatchNorm2d(out_filters))
+        layers.append(nn.LeakyReLU(0.2, inplace=True))
+        return layers
 
 """[ERROR]: using Norm(norm(nn.Conv2d)) causes weights not transferred to GPU"""
 class Discriminator_Unet(nn.Module):
@@ -407,16 +413,20 @@ class Discriminator_SN_SC(nn.Module):
         return out
 
 
-def blockUNet(in_c, out_c, name, transposed=False, bn=False, relu=True, dropout=False):
+def blockUNet(in_c, out_c, name, upsample='transpose', bn=False, relu=True, dropout=False):
     block = nn.Sequential()
     if relu:
         block.add_module('%s_relu' % name, nn.ReLU(inplace=True))
     else:
         block.add_module('%s_leakyrelu' % name, nn.LeakyReLU(0.2, inplace=True))
-    if not transposed:
-        block.add_module('%s_conv' % name, nn.Conv2d(in_c, out_c, 4, 2, 1, bias=False)) # 1/2 downsample
-    else:
+    if upsample=='transpose':
         block.add_module('%s_tconv' % name, nn.ConvTranspose2d(in_c, out_c, 4, 2, 1, bias=False))
+    elif upsample == 'downsample':
+        block.add_module('%s_conv' % name, nn.Conv2d(in_c, out_c, 4, 2, 1, bias=False)) # 1/2 downsample
+    elif upsample == 'linear':
+        block.add_module('%s_linear' % name, nn.Sequential(nn.Upsample(scale_factor=2, mode='bilinear'),
+            nn.Conv2d(in_c, out_c, 1,1,0, bias=False)
+            ))
     if bn:
         block.add_module('%s_bn' % name, nn.BatchNorm2d(out_c))
     if dropout:
@@ -434,38 +444,38 @@ class dwt_UNet(nn.Module):
         layer1.add_module(name, nn.Conv2d(16, nf-1, 4, 2, 1, bias=False))
         layer_idx += 1
         name = 'layer%d' % layer_idx
-        layer2 = blockUNet(nf, nf*2-2, name, transposed=False, bn=True, relu=False, dropout=False)
+        layer2 = blockUNet(nf, nf*2-2, name, upsample='downsample', bn=True, relu=False, dropout=False)
         layer_idx += 1
         name = 'layer%d' % layer_idx
-        layer3 = blockUNet(nf*2, nf*4-4, name, transposed=False, bn=True, relu=False, dropout=False)
+        layer3 = blockUNet(nf*2, nf*4-4, name, upsample='downsample', bn=True, relu=False, dropout=False)
         layer_idx += 1
         name = 'layer%d' % layer_idx
-        layer4 = blockUNet(nf*4, nf*8-8, name, transposed=False, bn=True, relu=False, dropout=False)
+        layer4 = blockUNet(nf*4, nf*8-8, name, upsample='downsample', bn=True, relu=False, dropout=False)
         layer_idx += 1
         name = 'layer%d' % layer_idx
-        layer5 = blockUNet(nf*8, nf*8-16, name, transposed=False, bn=True, relu=False, dropout=False)
+        layer5 = blockUNet(nf*8, nf*8-16, name, upsample='downsample', bn=True, relu=False, dropout=False)
         layer_idx += 1
         name = 'layer%d' % layer_idx
-        layer6 = blockUNet(nf*8, nf*8, name, transposed=False, bn=False, relu=False, dropout=False)
+        layer6 = blockUNet(nf*8, nf*8, name, upsample='downsample', bn=False, relu=False, dropout=False)
 
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer6 = blockUNet(nf * 8, nf * 8, name, transposed=True, bn=True, relu=True, dropout=False)
+        dlayer6 = blockUNet(nf * 8, nf * 8, name, upsample='linear', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer5 = blockUNet(nf * 16+16, nf * 8, name, transposed=True, bn=True, relu=True, dropout=False)
+        dlayer5 = blockUNet(nf * 16+16, nf * 8, name, upsample='linear', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer4 = blockUNet(nf * 16+8, nf * 4, name, transposed=True, bn=True, relu=True, dropout=False)
+        dlayer4 = blockUNet(nf * 16+8, nf * 4, name, upsample='linear', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer3 = blockUNet(nf * 8+4, nf * 2, name, transposed=True, bn=True, relu=True, dropout=False)
+        dlayer3 = blockUNet(nf * 8+4, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer2 = blockUNet(nf * 4+2, nf, name, transposed=True, bn=True, relu=True, dropout=False)
+        dlayer2 = blockUNet(nf * 4+2, nf, name, upsample='linear', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer1 = blockUNet(nf * 2+1, nf * 2, name, transposed=True, bn=True, relu=True, dropout=False)
+        dlayer1 = blockUNet(nf * 2+1, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
 
         self.initial_conv=nn.Conv2d(3,16,3,padding=1)
         self.bn1=nn.BatchNorm2d(16)
@@ -527,3 +537,120 @@ class dwt_UNet(nn.Module):
         tail2=self.bn2(tail1)
         dout1 = self.tail_conv2(tail2)
         return dout1
+class DWT_Generator(dwt_UNet):
+    def __init__(self):
+        super().__init__()
+        self.dwt = dwt_UNet()
+    def forward(self,x):
+        out = F.interpolate(x, scale_factor=2, mode = 'bilinear')
+        out1 = self.dwt(out)
+        return out1
+class dwt_UNet_G(nn.Module):
+    def __init__(self,input_shape=(3,64,64),output_nc=3, nf=16):
+        super(dwt_UNet_G, self).__init__()
+        self.input_shape = input_shape
+        self.output_shape = (output_nc, input_shape[1], input_shape[2])
+        layer_idx = 1
+        name = 'layer%d' % layer_idx
+        layer1 = nn.Sequential()
+        layer1.add_module(name, nn.Conv2d(16, nf-1, 4, 2, 1, bias=False))
+        layer_idx += 1
+        name = 'layer%d' % layer_idx
+        layer2 = blockUNet(nf, nf*2-2, name, upsample='downsample', bn=True, relu=False, dropout=False)
+        layer_idx += 1
+        name = 'layer%d' % layer_idx
+        layer3 = blockUNet(nf*2, nf*4-4, name, upsample='downsample', bn=True, relu=False, dropout=False)
+        layer_idx += 1
+        name = 'layer%d' % layer_idx
+        layer4 = blockUNet(nf*4, nf*8-8, name, upsample='downsample', bn=True, relu=False, dropout=False)
+        layer_idx += 1
+        name = 'layer%d' % layer_idx
+        layer5 = blockUNet(nf*8, nf*8-16, name, upsample='downsample', bn=True, relu=False, dropout=False)
+        layer_idx += 1
+        name = 'layer%d' % layer_idx
+        layer6 = blockUNet(nf*8, nf*8, name, upsample='downsample', bn=False, relu=False, dropout=False)
+
+        layer_idx -= 1
+        name = 'dlayer%d' % layer_idx
+        dlayer6 = blockUNet(nf * 8, nf * 8, name, upsample='linear', bn=True, relu=True, dropout=False)
+        layer_idx -= 1
+        name = 'dlayer%d' % layer_idx
+        dlayer5 = blockUNet(nf * 16+16, nf * 8, name, upsample='linear', bn=True, relu=True, dropout=False)
+        layer_idx -= 1
+        name = 'dlayer%d' % layer_idx
+        dlayer4 = blockUNet(nf * 16+8, nf * 4, name, upsample='linear', bn=True, relu=True, dropout=False)
+        layer_idx -= 1
+        name = 'dlayer%d' % layer_idx
+        dlayer3 = blockUNet(nf * 8+4, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
+        layer_idx -= 1
+        name = 'dlayer%d' % layer_idx
+        dlayer2 = blockUNet(nf * 4+2, nf, name, upsample='linear', bn=True, relu=True, dropout=False)
+        layer_idx -= 1
+        name = 'dlayer%d' % layer_idx
+        dlayer1 = blockUNet(nf * 2+1, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
+
+        self.initial_conv=nn.Conv2d(3,16,3,padding=1)
+        self.bn1=nn.BatchNorm2d(16)
+        self.layer1 = layer1
+        self.DWT_down_0= DWT_transform(3,1)
+        self.layer2 = layer2
+        self.DWT_down_1 = DWT_transform(16, 2)
+        self.layer3 = layer3
+        self.DWT_down_2 = DWT_transform(32, 4)
+        self.layer4 = layer4
+        self.DWT_down_3 = DWT_transform(64, 8)
+        self.layer5 = layer5
+        self.DWT_down_4 = DWT_transform(128, 16)
+        self.layer6 = layer6
+        self.dlayer6 = dlayer6
+        self.dlayer5 = dlayer5
+        self.dlayer4 = dlayer4
+        self.dlayer3 = dlayer3
+        self.dlayer2 = dlayer2
+        self.dlayer1 = dlayer1
+        self.tail_conv1 = nn.Conv2d(48, 32, 3, padding=1, bias=True)
+        self.bn2=nn.BatchNorm2d(32)
+        self.tail_conv2 = nn.Conv2d(nf*2, output_nc, 3,padding=1, bias=True)
+
+        self.apply(_init_weights)
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=2, mode='bilinear')
+        conv_start=self.initial_conv(x) # N*in_c*64*64 -> N*16*64*64
+        conv_start=self.bn1(conv_start) # -> N*16*64*64 
+        conv_out1 = self.layer1(conv_start) # -> N*15*32*32 
+        dwt_low_0,dwt_high_0=self.DWT_down_0(x)
+        out1=torch.cat([conv_out1, dwt_low_0], 1) # N*16*32*32 ->
+        conv_out2 = self.layer2(out1) # -> N*30*16*16
+        dwt_low_1,dwt_high_1= self.DWT_down_1(out1)
+        out2 = torch.cat([conv_out2, dwt_low_1], 1) # N*32*16*16 ->
+        conv_out3 = self.layer3(out2) # -> N*60*8*8
+        dwt_low_2,dwt_high_2 = self.DWT_down_2(out2)
+        out3 = torch.cat([conv_out3, dwt_low_2], 1) # N*64*8*8 ->
+        conv_out4 = self.layer4(out3) # N*120*4*4
+        dwt_low_3,dwt_high_3 = self.DWT_down_3(out3)
+        out4 = torch.cat([conv_out4, dwt_low_3], 1) # N*128*4*4 ->
+        conv_out5 = self.layer5(out4) # -> N*112*2*2
+        dwt_low_4,dwt_high_4 = self.DWT_down_4(out4)
+        out5 = torch.cat([conv_out5, dwt_low_4], 1) # N*128*2*2 ->
+        out6 = self.layer6(out5) # N*128*1*1 ->
+        dout6 = self.dlayer6(out6) # N*128*1*1 -> N*128*2*2
+
+        Tout6_out5 = torch.cat([dout6, out5, dwt_high_4], 1) # N*(128+128+16)*2*2 ->
+        Tout5 = self.dlayer5(Tout6_out5) # -> N*128*4*4
+        Tout5_out4 = torch.cat([Tout5, out4,dwt_high_3], 1) # N*(128+128+8)*4*4 ->
+        Tout4 = self.dlayer4(Tout5_out4) # -> N*64*8*8
+        Tout4_out3 = torch.cat([Tout4, out3,dwt_high_2], 1) # N*(64+64+4)*8*8 ->
+        Tout3 = self.dlayer3(Tout4_out3) # -> N*32*16*16
+        Tout3_out2 = torch.cat([Tout3, out2,dwt_high_1], 1) # N*(32+32+2)*16*16 ->
+        Tout2 = self.dlayer2(Tout3_out2) # -> N*16*32*32
+        Tout2_out1 = torch.cat([Tout2, out1,dwt_high_0], 1) # N*(16+16+1)*32*32 ->
+        Tout1 = self.dlayer1(Tout2_out1) # -> N*32*64*64
+        Tout1_outinit = torch.cat([Tout1, conv_start], 1)   # N*(32+16)*64*64 ->
+        tail1=self.tail_conv1(Tout1_outinit) # -> N*32*64*64
+        tail2=self.bn2(tail1)
+        dout1 = self.tail_conv2(tail2)   # -> N*in_c*64*64
+        return dout1
+#class MWCNN(nn.Module):
+#    def __init__(self):
+#        super().__init__()
+#        self.conv_block = blockUNet

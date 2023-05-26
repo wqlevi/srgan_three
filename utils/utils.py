@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 #from skimage.metrics import structural_similarity, normalized_root_mse
 import lpips
+from datetime import datetime as dt
+import os, json, yaml
 
 
 norm = lambda x: ((x-x.min())/(x.max() - x.min()))*2-1
@@ -93,3 +95,26 @@ def sv_2_dict(model)->dict:
 def freeze_model(model):
     for params in model.parameters():
         params.requires_grad =False
+
+def count_param(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def get_str_time():
+    now = dt.now()
+    str_time = now.strftime("%a-%d-%m-%y-%H%M%S")
+    return str_time
+def write_config(config):
+    '''
+    Parameters:
+    ----------
+        config : argparse namespace
+    '''
+    str_time = get_str_time()
+    print(f"{str_time}.json is being written\n")
+    os.makedirs(f"{config.model_name}/{config.name_ckp}", exist_ok = True)
+    with open(f"{config.model_name}/{config.name_ckp}/{str_time}.json","a") as f:
+        f.write(json.dumps(config.__dict__, indent=4))
+
+def load_yaml(filename:str):
+    yml = yaml.load(open(filename+'.yml'), Loader=yaml.FullLoader)
+    return yml
