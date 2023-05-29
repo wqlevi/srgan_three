@@ -34,7 +34,7 @@ gt_ts = transform(gt)[None,:,:,:]
 
 
 # load our weights
-ckp_path = 'esrgan_2d_FE/frozen_VGG19_noBN_Unet_D/checkpoints/last.ckpt' # a Unet Discriminator version GAN, trained for 50 epoch
+ckp_path = 'esrgan_2d_FE/DWT_D/checkpoints/last.ckpt' # a Unet Discriminator version GAN, trained for 50 epoch
 Gnet = Generator()
 load_pretrained(Gnet, ckp_path, replace_key = 'generator.')
 Gnet.eval()

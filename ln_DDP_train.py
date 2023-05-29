@@ -162,6 +162,8 @@ class GAN(L.LightningModule):
             g_pixel_loss = 0 # not using FE at all
         g_loss = g_content_loss + 5e-3*g_adv_loss + 1e-2*g_pixel_loss
         self.log("g_loss", g_loss, prog_bar = True)
+        self.log("g_content_loss", g_content_loss.item())
+        self.log("g_pixel_loss", g_pixel_loss.item())
         self.manual_backward(g_loss)
         optimizer_g.step()
         optimizer_g.zero_grad()
@@ -185,7 +187,8 @@ class GAN(L.LightningModule):
         grid_hr = make_grid(imgs_hr)
 
         fe_sv_list, g_sv_list = [],[]
-        #vs_d_dict = utils.sv_2_dict(self.discriminator)
+        vs_d_dict = utils.sv_2_dict(self.discriminator)
+        #vs_g_dict = utils.sv_2_dict(self.generator)
         #vs_fe_dict = utils.sv_2_dict(self.FE)
         #d_sv_list = self._get_Dnet_sv()
         #fe_sv_list = self._get_FE_sv()
@@ -203,7 +206,8 @@ class GAN(L.LightningModule):
         self.log("noise",self.sigma_numerics)
         #wandb.log(vs_d_dict) # not changing much and not starting from same value for all layers
         #wandb.log(vs_fe_dict) # not changing much and not starting from same value for all layers
-        #[self.log(k,v) for k,v in vs_d_dict.items()] # not changing much and not starting from same value for all layers
+        [self.log(k,v) for k,v in vs_d_dict.items()] # not changing much and not starting from same value for all layers
+        #[self.log(k+"_Gnet",v) for k,v in vs_g_dict.items()] # not changing much and not starting from same value for all layers
         #[self.log(k,v) for k,v in vs_fe_dict.items()] # not changing much and not starting from same value for all layers
         if batch_idx % self.log_images_interval == 0:
             self.logger.log_image("Results", [grid_sr, grid_hr], caption=["SR", "GT"])
@@ -244,7 +248,9 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     if opt.use_yaml_config:
         dict_yaml = utils.load_yaml(f'config/{opt.name_ckp}')
-        opt = argparse.Namespace(**dict_yaml)
+        update_opt_dict = vars(opt)
+        update_opt_dict.update(dict_yaml)
+        opt = argparse.Namespace(**update_opt_dict)
 
     wandb_logger = WandbLogger(project = opt.model_name,
             log_model = False,
@@ -268,7 +274,7 @@ if __name__ == '__main__':
             strategy='ddp_find_unused_parameters_true',
             logger = wandb_logger,
             callbacks = [checkpoint_callback],
-            limit_train_batches = 0.1,
+            #limit_train_batches = 0.1,
             #fast_dev_run=True
             ) # strategy flag when one model has not updating parameters
 

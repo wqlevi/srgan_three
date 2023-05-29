@@ -88,7 +88,7 @@ def sv_2_dict(model)->dict:
     sv_dict = {}
     counter = 0
     for k,v in model.named_modules():
-        if isinstance(v, nn.Conv2d):
+        if isinstance(v, nn.Conv2d) and hasattr(v, 'weight_sv'):
             sv_dict['Conv_sv_%i'%counter] = v.weight_sv.data.item()
             counter += 1
     return sv_dict

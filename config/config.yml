@@ -3,12 +3,13 @@ data_path: '/big_data/qi1/Celeba/train'
 plot_per_iter: 1000
 image_size: 64
 batch_size: 4
-num_epochs: 10
+num_epochs: 20
 input_channel: 3
 lr: 0.0001
 n_gpus: 1
 update_FE: true
 is_FE: true
+is_ckp: true
 name_ckp: 'DWT_D'
 arch_type: 'resnet18'
 D_type: 'dwt_UNet'

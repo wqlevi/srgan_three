@@ -477,7 +477,7 @@ class dwt_UNet(nn.Module):
         name = 'dlayer%d' % layer_idx
         dlayer1 = blockUNet(nf * 2+1, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
 
-        self.initial_conv=nn.Conv2d(3,16,3,padding=1)
+        self.initial_conv=Norm(nn.Conv2d(3,16,3,padding=1))
         self.bn1=nn.BatchNorm2d(16)
         self.layer1 = layer1
         self.DWT_down_0= DWT_transform(3,1)
@@ -589,7 +589,7 @@ class dwt_UNet_G(nn.Module):
         name = 'dlayer%d' % layer_idx
         dlayer1 = blockUNet(nf * 2+1, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
 
-        self.initial_conv=nn.Conv2d(3,16,3,padding=1)
+        self.initial_conv=Norm(nn.Conv2d(3,16,3,padding=1))
         self.bn1=nn.BatchNorm2d(16)
         self.layer1 = layer1
         self.DWT_down_0= DWT_transform(3,1)
