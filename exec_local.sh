@@ -1,1 +1,0 @@
-python ln_DDP_train.py --data_path /big_data/qi1/Celeba/train --num_epoch 100 --n_gpu 4 --batch_size 16 --name_ckp DWT_G_D_resnet18_FE --is_FE --update_FE --arch_type 'resnet18' --D_type 'dwt_UNet' --G_type 'dwt_UNet_G'

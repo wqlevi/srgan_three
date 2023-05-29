@@ -6,7 +6,7 @@ import sys
 #sys.path.append('../../NTIRE-2021-Dehazing-DWGAN')
 sys.path.append('../')
 #from models import *
-from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet, Discriminator_SN_SC, DWT_Generator, dwt_UNet_G
+from models.new_model import Generator, Discriminator, VGG19_54, Discriminator_Unet, Discriminator_SN_SC, DWT_Generator, dwt_UNet_G, DenseResidualBlock
 
 model_type = sys.argv[1]
 mod = import_module('models.new_model')

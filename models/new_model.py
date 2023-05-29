@@ -83,7 +83,7 @@ class DenseResidualBlock(nn.Module):
     output_dimension = input_dimension
     """
 
-    def __init__(self, filters, res_scale=0.2):
+    def __init__(self, filters=3, res_scale=0.2):
         super(DenseResidualBlock, self).__init__()
         self.res_scale = res_scale
 
@@ -425,6 +425,7 @@ def blockUNet(in_c, out_c, name, upsample='transpose', bn=False, relu=True, drop
         block.add_module('%s_conv' % name, nn.Conv2d(in_c, out_c, 4, 2, 1, bias=False)) # 1/2 downsample
     elif upsample == 'linear':
         block.add_module('%s_linear' % name, nn.Sequential(nn.Upsample(scale_factor=2, mode='bilinear'),
+            DenseResidualBlock(filters=in_c),
             nn.Conv2d(in_c, out_c, 1,1,0, bias=False)
             ))
     if bn:
