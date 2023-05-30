@@ -419,15 +419,21 @@ def blockUNet(in_c, out_c, name, upsample='transpose', bn=False, relu=True, drop
         block.add_module('%s_relu' % name, nn.ReLU(inplace=True))
     else:
         block.add_module('%s_leakyrelu' % name, nn.LeakyReLU(0.2, inplace=True))
+
     if upsample=='transpose':
-        block.add_module('%s_tconv' % name, nn.ConvTranspose2d(in_c, out_c, 4, 2, 1, bias=False))
+        block.add_module('%s_tconv' % name,nn.Sequential(nn.ConvTranspose2d(in_c, out_c, 4, 2, 1, bias=False),
+            DenseResidualBlock(filters=out_c))
+            )
     elif upsample == 'downsample':
-        block.add_module('%s_conv' % name, nn.Conv2d(in_c, out_c, 4, 2, 1, bias=False)) # 1/2 downsample
+        block.add_module('%s_conv' % name, nn.Sequential(nn.Conv2d(in_c, out_c, 4, 2, 1, bias=False),
+            DenseResidualBlock(filters=out_c))
+            ) # 1/2 downsample
     elif upsample == 'linear':
         block.add_module('%s_linear' % name, nn.Sequential(nn.Upsample(scale_factor=2, mode='bilinear'),
             DenseResidualBlock(filters=in_c),
             nn.Conv2d(in_c, out_c, 1,1,0, bias=False)
             ))
+
     if bn:
         block.add_module('%s_bn' % name, nn.BatchNorm2d(out_c))
     if dropout:
@@ -461,19 +467,19 @@ class dwt_UNet(nn.Module):
 
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer6 = blockUNet(nf * 8, nf * 8, name, upsample='linear', bn=True, relu=True, dropout=False)
+        dlayer6 = blockUNet(nf * 8, nf * 8, name, upsample='transpose', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer5 = blockUNet(nf * 16+16, nf * 8, name, upsample='linear', bn=True, relu=True, dropout=False)
+        dlayer5 = blockUNet(nf * 16+16, nf * 8, name, upsample='transpose', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer4 = blockUNet(nf * 16+8, nf * 4, name, upsample='linear', bn=True, relu=True, dropout=False)
+        dlayer4 = blockUNet(nf * 16+8, nf * 4, name, upsample='transpose', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer3 = blockUNet(nf * 8+4, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
+        dlayer3 = blockUNet(nf * 8+4, nf * 2, name, upsample='transpose', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
-        dlayer2 = blockUNet(nf * 4+2, nf, name, upsample='linear', bn=True, relu=True, dropout=False)
+        dlayer2 = blockUNet(nf * 4+2, nf, name, upsample='transpose', bn=True, relu=True, dropout=False)
         layer_idx -= 1
         name = 'dlayer%d' % layer_idx
         dlayer1 = blockUNet(nf * 2+1, nf * 2, name, upsample='linear', bn=True, relu=True, dropout=False)
